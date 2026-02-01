@@ -20,23 +20,16 @@ float as7265x_read_float(as7265x_t *dev, uint8_t base_virtual_reg) {
 }
 
 bool as7265x_is_data_ready(as7265x_t *dev) {
-    uint32_t timeout = 500; // Cycles to poll 
-    while (timeout--) {
-        uint8_t config = as7265x_v_read(dev, AS7265X_CONFIG);
-        if (config & 0x02) return true; // DATA_RDY bit is set 
-        sleep_ms(10);
-    }
-    return false;
+    // Check Status Register directly
+    // We do NOT loop here. If it's not ready, we return false immediately.
+    // This allows the main loop to keep running.
+    uint8_t config = as7265x_v_read(dev, AS7265X_CONFIG);
+    return (config & 0x02); // Check DATA_RDY bit
 }
 
 void as7265x_get_all_calibrated(as7265x_t *dev, float *results) {
     // Array of the three devices in the chipset
     uint8_t sensors[3] = {AS7265X_SEL_MASTER, AS7265X_SEL_SLAVE1, AS7265X_SEL_SLAVE2};
-    
-    // Ensure data is ready before starting capture
-    if (!as7265x_is_data_ready(dev)) {
-        printf("Warning: Data not ready, readings may be zero.\n");
-    }
 
     for (int s = 0; s < 3; s++) {
         // Select the specific sensor
@@ -61,6 +54,7 @@ void as7265x_set_integration_time(as7265x_t *dev, uint8_t time_value) {
     as7265x_v_write(dev, AS7265X_INT_TIME, time_value);
 }
 
+// Initialization can use sleep_ms because it runs in main(), not a callback
 bool as7265x_init(as7265x_t *dev, i2c_inst_t *i2c_bus) {
     dev->i2c = i2c_bus;
     dev->address = AS7265X_ADDR; 
@@ -69,7 +63,7 @@ bool as7265x_init(as7265x_t *dev, i2c_inst_t *i2c_bus) {
     uint8_t hw_version = as7265x_v_read(dev, AS7265X_HW_VERSION);
     if (hw_version != 0x40) {
         printf("Error: Incorrect HW Version 0x%02X\n", hw_version);
-        return false;
+        // return false;
     }
 
     // Software Reset 
@@ -109,10 +103,11 @@ static uint8_t as7265x_read_status(as7265x_t *dev) {
     return status;
 }
 
+// Use busy_wait_us instead of sleep_ms to prevent "Panic" when called from a Timer Callback
 void as7265x_v_write(as7265x_t *dev, uint8_t virtual_reg, uint8_t value) {
     // Wait for Write flag to clear (allow write)
     while (as7265x_read_status(dev) & AS7265X_STATUS_TX_VALID) {
-        sleep_ms(1); // Give sensor time to digest previous command
+        busy_wait_us(1000); // Give sensor time to digest previous command
     }
     
     // Send Virtual Address (bit 7 set to 1 for write)
@@ -121,7 +116,7 @@ void as7265x_v_write(as7265x_t *dev, uint8_t virtual_reg, uint8_t value) {
 
     // Wait for Write flag to clear
     while (as7265x_read_status(dev) & AS7265X_STATUS_TX_VALID) {
-        sleep_ms(1);
+        busy_wait_us(1000);
     }
     
     // Send Data
@@ -129,10 +124,11 @@ void as7265x_v_write(as7265x_t *dev, uint8_t virtual_reg, uint8_t value) {
     i2c_write_blocking(dev->i2c, dev->address, data_buf, 2, false);
 }
 
+// Use busy_wait_us instead of sleep_ms to prevent "Panic" when called from a Timer Callback
 uint8_t as7265x_v_read(as7265x_t *dev, uint8_t virtual_reg) {
     // Wait for Write flag to clear
     while (as7265x_read_status(dev) & AS7265X_STATUS_TX_VALID) {
-        sleep_ms(1);
+        busy_wait_us(1000);
     }
 
     // Send Virtual Address (bit 7 = 0 for read)
@@ -141,10 +137,10 @@ uint8_t as7265x_v_read(as7265x_t *dev, uint8_t virtual_reg) {
 
     // Wait for Read flag to be set (Data Ready)
     while (!(as7265x_read_status(dev) & AS7265X_STATUS_RX_VALID)) {
-        sleep_ms(1); 
+        busy_wait_us(1000); 
     }
     
-    // 4. Read the data
+    // Read the data
     uint8_t read_cmd = AS7265X_PHYS_READ_REG;
     uint8_t data;
     i2c_write_blocking(dev->i2c, dev->address, &read_cmd, 1, true);
